@@ -1,10 +1,13 @@
 use color_eyre::{eyre::eyre, Result};
 use serde::{Deserialize, Serialize};
-use std::env;
-use std::io::Read;
-use std::path::PathBuf;
-use std::process::Command;
-use std::{fs::File, path::Path};
+use std::{
+    env,
+    fs::File,
+    io::Read,
+    os::unix::prelude::ExitStatusExt,
+    path::{Path, PathBuf},
+    process::{Command, ExitStatus},
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,30 +17,28 @@ struct RunConfig {
 }
 
 impl RunConfig {
-    fn before(&self) -> Result<()> {
+    fn before(&self) -> Result<ExitStatus> {
         let cmd = if let Some(cmd) = self.before.first() {
             cmd
         } else {
-            return Ok(());
+            return Ok(ExitStatus::from_raw(0));
         };
         let mut command = Command::new(cmd);
         command.args(self.before.iter().skip(1));
         tracing::info!("[before]: {:?}", command);
-        command.status()?;
-        Ok(())
+        Ok(command.status()?)
     }
 
-    fn after(&self) -> Result<()> {
+    fn after(&self) -> Result<ExitStatus> {
         let cmd = if let Some(cmd) = self.after.first() {
             cmd
         } else {
-            return Ok(());
+            return Ok(ExitStatus::from_raw(0));
         };
         let mut command = Command::new(cmd);
         command.args(self.after.iter().skip(1));
         tracing::info!("[after]: {:?}", command);
-        command.status()?;
-        Ok(())
+        Ok(command.status()?)
     }
 }
 
@@ -62,9 +63,17 @@ fn main() -> Result<()> {
     let targets: Vec<String> = env::args().skip(1).collect();
     for target in targets {
         let config = config(target)?;
-        config.before()?;
+        let status = config.before()?;
+        if !status.success() {
+            tracing::error!("[before] failed.");
+            return Ok(());
+        }
         Command::new(&shell).status()?;
-        config.after()?;
+        let status = config.after()?;
+        if !status.success() {
+            tracing::error!("[before] failed.");
+            return Ok(());
+        }
     }
     Ok(())
 }
