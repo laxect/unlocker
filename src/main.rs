@@ -5,13 +5,26 @@ use std::{
     fs::File,
     io::Read,
     os::unix::prelude::ExitStatusExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, ExitStatus},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RunConfigSer {
+    before: Vec<String>,
+    after: Vec<String>,
+}
+
+impl RunConfigSer {
+    fn fill(self, name: String) -> RunConfig {
+        let Self { before, after } = self;
+        RunConfig { name, before, after }
+    }
+}
+
 struct RunConfig {
+    name: String,
     before: Vec<String>,
     after: Vec<String>,
 }
@@ -42,17 +55,18 @@ impl RunConfig {
     }
 }
 
-fn config<P: AsRef<Path>>(name: P) -> Result<RunConfig> {
-    let mut name = PathBuf::from(name.as_ref());
-    name.set_extension("toml");
+fn config(name: String) -> Result<RunConfig> {
+    let mut path = PathBuf::from(&name);
+    path.set_extension("toml");
     let config_path = dirs::config_dir()
         .ok_or_else(|| eyre!("No XDG config path find"))?
         .join("unlocker")
-        .join(name);
+        .join(path);
     let mut config_file = File::open(config_path)?;
     let mut buffer = String::new();
     config_file.read_to_string(&mut buffer)?;
-    Ok(toml::from_str(&buffer)?)
+    let config_precursor: RunConfigSer = toml::from_str(&buffer)?;
+    Ok(config_precursor.fill(name))
 }
 
 fn main() -> Result<()> {
@@ -60,18 +74,20 @@ fn main() -> Result<()> {
     color_eyre::install()?;
 
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    let targets: Vec<String> = env::args().skip(1).collect();
-    for target in targets {
-        let config = config(target)?;
+    let configs: Result<Vec<RunConfig>> = env::args().skip(1).map(|target| config(target)).collect();
+    let configs = configs?;
+    for config in configs.iter() {
         let status = config.before()?;
         if !status.success() {
-            tracing::error!("[before] failed.");
+            tracing::error!("[before::{}] failed.", config.name);
             return Ok(());
         }
-        Command::new(&shell).status()?;
+    }
+    Command::new(&shell).status()?;
+    for config in configs.iter() {
         let status = config.after()?;
         if !status.success() {
-            tracing::error!("[before] failed.");
+            tracing::error!("[after::{}] failed.", config.name);
             return Ok(());
         }
     }
